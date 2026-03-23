@@ -1,0 +1,80 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL database ────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vreal
+      POSTGRES_USER: vreal
+      POSTGRES_PASSWORD: vreal_secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vreal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── MinIO object storage ───────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: vreal_admin
+      MINIO_ROOT_PASSWORD: vreal_secret123
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000" # S3 API  (also lets dev backend reach it directly)
+      - "9001:9001" # MinIO console — http://localhost:9001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── NestJS backend ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: vreal
+      DB_USER: vreal
+      DB_PASSWORD: vreal_secret
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: vreal_admin
+      MINIO_SECRET_KEY: vreal_secret123
+      MINIO_BUCKET: vreal
+      NODE_ENV: production
+    ports:
+      - "6001:6001" # Swagger at http://localhost:6001/api/docs
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  # ── React frontend (vite preview) ─────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    environment:
+      API_TARGET: http://backend:6001
+      MINIO_TARGET: http://minio:9000
+    ports:
+      - "4173:4173"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  minio_data:
